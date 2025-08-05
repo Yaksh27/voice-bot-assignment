@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import axios from 'axios';
 import { Mic, MicOff, Volume2, Loader2, MessageSquare, User, Bot } from 'lucide-react';
 import './App.css';
 
@@ -56,47 +57,59 @@ function App() {
       mediaRecorderRef.current.ondataavailable = e => {
         if (e.data.size) audioChunksRef.current.push(e.data);
       };
-      mediaRecorderRef.current.onstop = processAudioForAPI;
       mediaRecorderRef.current.start(1000);
     } catch (err) {
       setError('Microphone access denied: ' + err.message);
+      setIsRecording(false);
     }
   };
 
   const stopRecording = () => {
     setIsRecording(false);
-    recognitionRef.current?.stop();
-    if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current.stop();
+
+    // Stop recorder + mic
+    if (mediaRecorderRef.current?.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
     streamRef.current?.getTracks().forEach(t => t.stop());
+
+    // Call the API only after STT truly finishes
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = () => {
+        recognitionRef.current.onend = null; // clean up handler
+        if (!transcript.trim()) {
+          setError('No speech detected. Please try again.');
+          return;
+        }
+        processAudioForAPI(); // single, reliable call
+      };
+      recognitionRef.current.stop();
+    }
   };
 
   /* ---------- talk to backend ---------- */
   const processAudioForAPI = async () => {
-    if (!transcript.trim()) { 
-      setError('No speech detected. Please try again.'); 
-      return; 
-    }
     setIsProcessing(true);
+
     try {
-      // Simulating API call - replace with actual endpoint
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      const mockResponse = {
-        success: true,
-        textResponse: "Thank you for sharing that. Can you tell me more about your experience with similar challenges?",
-        audioResponse: null
-      };
-      
-      if (mockResponse.success) {
-        await playAudioResponse(mockResponse.audioResponse, mockResponse.textResponse);
-        setConversation(p => [...p,
-          { type: 'user', text: transcript },
-          { type: 'bot', text: mockResponse.textResponse }
-        ]);
-      } else throw new Error('Invalid response');
+      const { data } = await axios.post('http://localhost:5000/api/voice-chat', {
+        userText: transcript.trim()
+      });
+
+      if (!data.success) throw new Error('Backend returned failure');
+
+      await playAudioResponse(data.audioResponse, data.textResponse);
+
+      setConversation(prev => [
+        ...prev,
+        { type: 'user', text: transcript },
+        { type: 'bot', text: data.textResponse }
+      ]);
+
     } catch (err) {
       setError('Request failed: ' + err.message);
-    } finally { 
-      setIsProcessing(false); 
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -127,9 +140,9 @@ function App() {
   /* ---------- audio playback ---------- */
   const playAudioResponse = async (base64Audio, textResp) => {
     setIsPlaying(true);
-    if (!base64Audio) { 
-      speakBrowserTTS(textResp); 
-      return; 
+    if (!base64Audio) {
+      speakBrowserTTS(textResp);
+      return;
     }
 
     try {
@@ -138,17 +151,17 @@ function App() {
       const blob = new Blob([buf], { type: 'audio/mp3' });
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
-      audio.onended = () => { 
-        setIsPlaying(false); 
-        URL.revokeObjectURL(url); 
+      audio.onended = () => {
+        setIsPlaying(false);
+        URL.revokeObjectURL(url);
       };
-      audio.onerror = () => { 
-        URL.revokeObjectURL(url); 
-        speakBrowserTTS(textResp); 
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        speakBrowserTTS(textResp);
       };
       await audio.play();
-    } catch { 
-      speakBrowserTTS(textResp); 
+    } catch {
+      speakBrowserTTS(textResp);
     }
   };
 
@@ -210,7 +223,7 @@ function App() {
               <MessageSquare className="icon" />
               <h2>Conversation</h2>
             </div>
-            
+
             <div className="conversation">
               {conversation.map((message, index) => (
                 <div key={index} className={`message-wrapper ${message.type}`}>
@@ -221,7 +234,7 @@ function App() {
                       <Bot className="icon" />
                     )}
                   </div>
-                  
+
                   <div className="message-content">
                     <div className="message-bubble">
                       <p>{message.text}</p>
@@ -238,7 +251,7 @@ function App() {
           <div className="welcome-card">
             <h3 className="welcome-title">Ready to begin your interview</h3>
             <p className="welcome-description">
-              Click the recording button and speak naturally. The AI interviewer will listen, 
+              Click the recording button and speak naturally. The AI interviewer will listen,
               understand your responses, and ask relevant follow-up questions.
             </p>
             <div className="features-grid">
