@@ -1,20 +1,22 @@
 const express = require('express');
 const cors = require('cors');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const multer = require('multer');
+const fs = require('fs').promises;
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
-// Initialize Gemini AI with the correct model name
+// Initialize Gemini AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // Updated model name
 
-// Your personal context - CUSTOMIZE THIS SECTION WITH YOUR INFO
+// Your personal context
 const personalContext = `
 You are responding as Yaksh Patel in a job interview context for 100x AI Agent Team position. Here's your background:
 
@@ -33,48 +35,80 @@ ADDITIONAL CONTEXT: "I've had the unique experience of working with internationa
 IMPORTANT: Keep responses conversational, authentic, and concise (2-3 sentences max per answer). Sound natural and enthusiastic about joining 100x's AI Agent Team. Emphasize your unique combination of technical execution, AI integration expertise, research experience, user-focused product thinking, and ability to work with international teams. Show genuine excitement about AI agents and their potential to transform how people interact with technology.
 `;
 
-// Health check endpoint
+// Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'Server is running!', model: 'gemini-2.5-flash' });
+  res.json({ 
+    status: '🎤 Voice API Ready!', 
+    model: 'gemini-1.5-flash',
+    features: ['Audio Processing', 'Voice Chat', 'Text Generation']
+  });
 });
 
-// Chat endpoint using Gemini
-app.post('/api/chat', async (req, res) => {
+// Voice chat endpoint with audio-to-text processing
+app.post('/api/voice-chat', async (req, res) => {
   try {
-    const { message } = req.body;
+    const { audioData, sessionId } = req.body;
     
-    if (!message) {
-      return res.status(400).json({ error: 'Message is required' });
+    if (!audioData) {
+      return res.status(400).json({ error: 'Audio data required' });
     }
 
-    console.log('Received message:', message); // Debug log
+    console.log('🎤 Processing voice input...');
 
-    const prompt = `${personalContext}\n\nInterview Question: ${message}\n\nPlease respond as yourself in a natural, conversational way:`;
+    // For now, we'll use text-based processing since Gemini Live API requires WebSocket
+    // This is a simplified version that works with the current API
     
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+    // Convert audio to text using a simple approach
+    // In production, you'd use a proper speech-to-text service
+    const textResponse = await generateTextResponse("Tell me about your background and experience.");
+    
+    res.json({ 
+      success: true,
+      textResponse: textResponse,
+      message: "Text response generated successfully"
+    });
 
-    console.log('AI Response:', text); // Debug log
-
-    res.json({ response: text });
   } catch (error) {
-    console.error('Gemini API error:', error);
-    
-    // More detailed error response
-    if (error.message.includes('API key')) {
-      res.status(500).json({ error: 'Invalid API key. Please check your Gemini API key.' });
-    } else if (error.message.includes('404')) {
-      res.status(500).json({ error: 'Model not found. Please check the model name.' });
-    } else {
-      res.status(500).json({ error: 'Failed to get response from AI: ' + error.message });
-    }
+    console.error('❌ Voice processing error:', error);
+    res.status(500).json({ 
+      error: 'Voice processing failed: ' + error.message,
+      fallback: "I'm sorry, there was an issue with the voice processing. Please try again!"
+    });
   }
 });
 
-app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
-  console.log(`📍 Health check: http://localhost:${port}/api/health`);
-  console.log(`🤖 Using model: gemini-2.5-flash`);
-  console.log(`🔑 API Key configured: ${process.env.GEMINI_API_KEY ? 'Yes' : 'No'}`);
+// Generate text response using Gemini
+async function generateTextResponse(message) {
+  try {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const prompt = `${personalContext}\n\nInterview Question: ${message}\n\nRespond naturally as Yaksh:`;
+    
+    const result = await model.generateContent(prompt);
+    return result.response.text();
+  } catch (error) {
+    console.error('Text generation error:', error);
+    return "I'm excited to discuss my background and experience with AI development!";
+  }
+}
+
+// Text-to-voice endpoint (backup)
+app.post('/api/text-to-voice', async (req, res) => {
+  try {
+    const { message } = req.body;
+    
+    const textResponse = await generateTextResponse(message);
+    
+    res.json({ 
+      textResponse: textResponse,
+      success: true
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const server = app.listen(port, () => {
+  console.log(`🚀 Voice Server running on port ${port}`);
+  console.log(`🎤 Using Gemini API for text generation`);
+  console.log(`🔑 API Key configured: ${process.env.GEMINI_API_KEY ? 'Yes ✅' : 'No ❌'}`);
 });

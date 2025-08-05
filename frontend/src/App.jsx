@@ -1,64 +1,19 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import './App.css';
 
 function App() {
-  const [isListening, setIsListening] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [transcript, setTranscript] = useState('');
-  const [botResponse, setBotResponse] = useState(''); // Renamed from 'response'
-  const [isLoading, setIsLoading] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [conversation, setConversation] = useState([]);
   const [error, setError] = useState('');
   
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
   const recognitionRef = useRef(null);
-  const synthRef = useRef(window.speechSynthesis);
-
-  // Send message to backend (moved up and wrapped in useCallback)
-  const handleSendMessage = useCallback(async (message) => {
-    if (!message.trim()) return;
-
-    setIsLoading(true);
-    setError('');
-
-    try {
-      const response = await axios.post('/api/chat', {
-        message: message.trim()
-      });
-
-      const aiResponse = response.data.response;
-      setBotResponse(aiResponse);
-      
-      // Add to conversation history
-      setConversation(prev => [...prev, 
-        { type: 'user', text: message },
-        { type: 'bot', text: aiResponse }
-      ]);
-
-      // Speak the response
-      speakText(aiResponse);
-
-    } catch (error) {
-      console.error('Error sending message:', error);
-      setError('Failed to get response. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
-  }, []); // Empty dependency array since it doesn't depend on state/props
-
-  // Text to speech
-  const speakText = useCallback((text) => {
-    if (synthRef.current) {
-      // Cancel any ongoing speech
-      synthRef.current.cancel();
-      
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.9;
-      utterance.pitch = 1;
-      utterance.volume = 1;
-      
-      synthRef.current.speak(utterance);
-    }
-  }, []);
+  const streamRef = useRef(null);
 
   // Initialize speech recognition
   useEffect(() => {
@@ -66,103 +21,237 @@ function App() {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       recognitionRef.current = new SpeechRecognition();
       
-      recognitionRef.current.continuous = false;
-      recognitionRef.current.interimResults = false;
+      recognitionRef.current.continuous = true;
+      recognitionRef.current.interimResults = true;
       recognitionRef.current.lang = 'en-US';
 
       recognitionRef.current.onresult = (event) => {
-        const lastResult = event.results[event.results.length - 1];
-        const spokenText = lastResult[0].transcript;
-        setTranscript(spokenText);
-        handleSendMessage(spokenText);
+        let finalTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          if (event.results[i].isFinal) {
+            finalTranscript += event.results[i][0].transcript;
+          }
+        }
+        if (finalTranscript) {
+          setTranscript(finalTranscript);
+        }
       };
 
       recognitionRef.current.onerror = (event) => {
         console.error('Speech recognition error:', event.error);
-        setError('Speech recognition error. Please try again.');
-        setIsListening(false);
       };
-
-      recognitionRef.current.onend = () => {
-        setIsListening(false);
-      };
-    } else {
-      setError('Speech recognition not supported in this browser.');
     }
-  }, [handleSendMessage]); // Now includes handleSendMessage dependency
+  }, []);
 
-  // Start listening
-  const startListening = () => {
-    if (recognitionRef.current && !isListening) {
+  // Start recording
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true
+        }
+      });
+
+      streamRef.current = stream;
+      setIsRecording(true);
       setError('');
-      setIsListening(true);
-      recognitionRef.current.start();
-    }
-  };
-
-  // Stop listening
-  const stopListening = () => {
-    if (recognitionRef.current && isListening) {
-      recognitionRef.current.stop();
-      setIsListening(false);
-    }
-  };
-
-  // Manual text input
-  const handleTextSubmit = (e) => {
-    e.preventDefault();
-    if (transcript.trim()) {
-      handleSendMessage(transcript);
       setTranscript('');
+      audioChunksRef.current = [];
+
+      // Start visual transcript
+      if (recognitionRef.current) {
+        recognitionRef.current.start();
+      }
+
+      // Start audio recording
+      mediaRecorderRef.current = new MediaRecorder(stream, {
+        mimeType: 'audio/webm;codecs=opus'
+      });
+
+      mediaRecorderRef.current.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorderRef.current.onstop = () => {
+        processAudioForAPI();
+      };
+
+      mediaRecorderRef.current.start(1000); // Collect data every second
+
+    } catch (error) {
+      setError('Microphone access denied: ' + error.message);
+      setIsRecording(false);
+    }
+  };
+
+  // Stop recording
+  const stopRecording = () => {
+    setIsRecording(false);
+    
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+    
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+
+    // Stop all audio tracks
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+    }
+  };
+
+  // Process audio for API
+  const processAudioForAPI = async () => {
+    setIsProcessing(true);
+
+    try {
+      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      
+      // Convert to base64 for sending to backend
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64Audio = reader.result.split(',')[1]; // Remove data:audio/webm;base64, prefix
+
+        console.log('🎤 Sending audio to backend...');
+
+        try {
+          // Send to backend
+          const response = await axios.post('http://localhost:5000/api/voice-chat', {
+            audioData: base64Audio,
+            sessionId: Date.now().toString()
+          });
+
+          if (response.data.success && response.data.audioResponse) {
+            // Play audio response
+            await playAudioResponse(response.data.audioResponse);
+            
+            // Add to conversation
+            setConversation(prev => [...prev, 
+              { type: 'user', text: transcript || 'Voice message' },
+              { type: 'bot', text: '🎵 AI Voice Response' }
+            ]);
+          } else if (response.data.textResponse) {
+            // Fallback to text response
+            setConversation(prev => [...prev, 
+              { type: 'user', text: transcript || 'Voice message' },
+              { type: 'bot', text: response.data.textResponse }
+            ]);
+          } else {
+            throw new Error('No response received');
+          }
+
+        } catch (error) {
+          console.error('API call error:', error);
+          setError('Voice processing failed: ' + error.message);
+        }
+      };
+
+      reader.readAsDataURL(audioBlob);
+
+    } catch (error) {
+      console.error('Audio processing error:', error);
+      setError('Audio processing failed: ' + error.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Play audio response
+  const playAudioResponse = async (base64AudioData) => {
+    try {
+      setIsPlaying(true);
+      
+      // Convert base64 to blob
+      const binaryString = atob(base64AudioData);
+      const arrayBuffer = new ArrayBuffer(binaryString.length);
+      const uint8Array = new Uint8Array(arrayBuffer);
+      
+      for (let i = 0; i < binaryString.length; i++) {
+        uint8Array[i] = binaryString.charCodeAt(i);
+      }
+      
+      const audioBlob = new Blob([arrayBuffer], { type: 'audio/wav' });
+      const audioUrl = URL.createObjectURL(audioBlob);
+      
+      const audio = new Audio(audioUrl);
+      audio.onended = () => {
+        setIsPlaying(false);
+        URL.revokeObjectURL(audioUrl);
+      };
+      
+      audio.onerror = () => {
+        setIsPlaying(false);
+        setError('Failed to play audio response');
+        URL.revokeObjectURL(audioUrl);
+      };
+      
+      await audio.play();
+
+    } catch (error) {
+      console.error('Audio playback error:', error);
+      setError('Failed to play audio response');
+      setIsPlaying(false);
     }
   };
 
   return (
     <div className="App">
       <header className="app-header">
-        <h1>🎤 Voice Interview Bot</h1>
-        <p>AI Agent Team Interview - 100x</p>
+        <h1>🎤 Native Voice Interview</h1>
+        <p>100x AI Agent Team | Powered by Gemini Live API</p>
+        <div className="status-badges">
+          <span className="badge native-audio">🎵 Native Audio</span>
+          <span className="badge real-time">⚡ Real-time</span>
+          <span className="badge human-like">🗣️ Human-like</span>
+        </div>
       </header>
 
       <main className="main-content">
         {/* Voice Controls */}
         <div className="voice-controls">
           <button 
-            className={`voice-btn ${isListening ? 'listening' : ''}`}
-            onClick={isListening ? stopListening : startListening}
-            disabled={isLoading}
+            className={`voice-btn ${isRecording ? 'recording' : ''} ${isProcessing ? 'processing' : ''} ${isPlaying ? 'playing' : ''}`}
+            onClick={isRecording ? stopRecording : startRecording}
+            disabled={isProcessing || isPlaying}
           >
-            {isListening ? '🔴 Stop Listening' : '🎤 Start Voice Chat'}
+            {isRecording ? '🔴 Stop Recording' : 
+             isProcessing ? '🤖 AI Thinking...' :
+             isPlaying ? '🎵 Speaking...' :
+             '🎤 Start Voice Interview'}
           </button>
           
-          {isListening && (
-            <div className="listening-indicator">
-              <span>Listening...</span>
+          {isRecording && (
+            <div className="recording-indicator">
+              <span>🎤 Recording... Click "Stop Recording" when done</span>
               <div className="pulse-animation"></div>
+            </div>
+          )}
+
+          {isProcessing && (
+            <div className="processing-indicator">
+              <span>🤖 Processing with AI...</span>
+            </div>
+          )}
+
+          {isPlaying && (
+            <div className="playing-indicator">
+              <span>🎵 Playing AI response...</span>
             </div>
           )}
         </div>
 
-        {/* Manual Text Input */}
-        <form onSubmit={handleTextSubmit} className="text-input-form">
-          <input
-            type="text"
-            value={transcript}
-            onChange={(e) => setTranscript(e.target.value)}
-            placeholder="Or type your question here..."
-            className="text-input"
-            disabled={isLoading}
-          />
-          <button type="submit" disabled={isLoading || !transcript.trim()}>
-            Send
-          </button>
-        </form>
-
-        {/* Loading State */}
-        {isLoading && (
-          <div className="loading">
-            <div className="spinner"></div>
-            <span>Thinking...</span>
+        {/* Real-time transcript */}
+        {transcript && (
+          <div className="transcript">
+            <h4>You said:</h4>
+            <p>"{transcript}"</p>
           </div>
         )}
 
@@ -170,6 +259,7 @@ function App() {
         {error && (
           <div className="error">
             <p>{error}</p>
+            <button onClick={() => setError('')}>Clear</button>
           </div>
         )}
 
@@ -177,13 +267,14 @@ function App() {
         <div className="conversation">
           {conversation.length === 0 && (
             <div className="welcome-message">
-              <h3>Welcome! 👋</h3>
-              <p>Ask me interview questions like:</p>
+              <h3>🎤 Ready for Voice Interview!</h3>
+              <p><strong>This uses AI for natural conversation!</strong></p>
+              <p>Try asking:</p>
               <ul>
-                <li>"What should we know about your life story?"</li>
-                <li>"What's your number one superpower?"</li>
-                <li>"What are your top 3 growth areas?"</li>
-                <li>"How do you push your boundaries?"</li>
+                <li>🗣️ "Tell me about your background"</li>
+                <li>🗣️ "What's your superpower?"</li>
+                <li>🗣️ "What are your growth areas?"</li>
+                <li>🗣️ "How do you push boundaries?"</li>
               </ul>
             </div>
           )}
@@ -191,7 +282,7 @@ function App() {
           {conversation.map((msg, index) => (
             <div key={index} className={`message ${msg.type}`}>
               <div className="message-content">
-                <strong>{msg.type === 'user' ? 'Interviewer:' : 'You:'}</strong>
+                <strong>{msg.type === 'user' ? '🎤 Interviewer:' : '🤖 Yaksh:'}</strong>
                 <p>{msg.text}</p>
               </div>
             </div>
