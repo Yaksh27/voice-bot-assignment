@@ -1,293 +1,271 @@
 import React, { useState, useRef, useEffect } from 'react';
-import axios from 'axios';
+import { Mic, MicOff, Volume2, Loader2, MessageSquare, User, Bot } from 'lucide-react';
 import './App.css';
 
 function App() {
+  /* ---------- state & refs ---------- */
   const [isRecording, setIsRecording] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [conversation, setConversation] = useState([]);
   const [error, setError] = useState('');
-  
+
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const recognitionRef = useRef(null);
   const streamRef = useRef(null);
 
-  // Initialize speech recognition
+  /* ---------- speech-to-text ---------- */
   useEffect(() => {
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       recognitionRef.current = new SpeechRecognition();
-      
       recognitionRef.current.continuous = true;
       recognitionRef.current.interimResults = true;
       recognitionRef.current.lang = 'en-US';
 
-      recognitionRef.current.onresult = (event) => {
-        let finalTranscript = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          if (event.results[i].isFinal) {
-            finalTranscript += event.results[i][0].transcript;
-          }
+      recognitionRef.current.onresult = e => {
+        let finalTx = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal) finalTx += e.results[i][0].transcript;
         }
-        if (finalTranscript) {
-          setTranscript(finalTranscript);
-        }
+        if (finalTx) setTranscript(finalTx);
       };
 
-      recognitionRef.current.onerror = (event) => {
-        console.error('Speech recognition error:', event.error);
+      recognitionRef.current.onerror = e => {
+        console.error('STT error:', e.error);
+        setError('Speech recognition error: ' + e.error);
       };
     }
   }, []);
 
-  // Start recording
+  /* ---------- record helpers ---------- */
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          sampleRate: 16000,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true
-        }
-      });
-
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       setIsRecording(true);
       setError('');
       setTranscript('');
       audioChunksRef.current = [];
 
-      // Start visual transcript
-      if (recognitionRef.current) {
-        recognitionRef.current.start();
-      }
+      recognitionRef.current?.start();
 
-      // Start audio recording
-      mediaRecorderRef.current = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus'
-      });
-
-      mediaRecorderRef.current.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      mediaRecorderRef.current.ondataavailable = e => {
+        if (e.data.size) audioChunksRef.current.push(e.data);
       };
-
-      mediaRecorderRef.current.onstop = () => {
-        processAudioForAPI();
-      };
-
-      mediaRecorderRef.current.start(1000); // Collect data every second
-
-    } catch (error) {
-      setError('Microphone access denied: ' + error.message);
-      setIsRecording(false);
+      mediaRecorderRef.current.onstop = processAudioForAPI;
+      mediaRecorderRef.current.start(1000);
+    } catch (err) {
+      setError('Microphone access denied: ' + err.message);
     }
   };
 
-  // Stop recording
   const stopRecording = () => {
     setIsRecording(false);
-    
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-    }
-    
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-
-    // Stop all audio tracks
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-    }
+    recognitionRef.current?.stop();
+    if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current.stop();
+    streamRef.current?.getTracks().forEach(t => t.stop());
   };
 
-  // Process audio for API
+  /* ---------- talk to backend ---------- */
   const processAudioForAPI = async () => {
+    if (!transcript.trim()) { 
+      setError('No speech detected. Please try again.'); 
+      return; 
+    }
     setIsProcessing(true);
-
     try {
-      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-      
-      // Convert to base64 for sending to backend
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-        const base64Audio = reader.result.split(',')[1]; // Remove data:audio/webm;base64, prefix
-
-        console.log('🎤 Sending audio to backend...');
-
-        try {
-          // Send to backend
-          const response = await axios.post('http://localhost:5000/api/voice-chat', {
-            audioData: base64Audio,
-            sessionId: Date.now().toString()
-          });
-
-          if (response.data.success && response.data.audioResponse) {
-            // Play audio response
-            await playAudioResponse(response.data.audioResponse);
-            
-            // Add to conversation
-            setConversation(prev => [...prev, 
-              { type: 'user', text: transcript || 'Voice message' },
-              { type: 'bot', text: '🎵 AI Voice Response' }
-            ]);
-          } else if (response.data.textResponse) {
-            // Fallback to text response
-            setConversation(prev => [...prev, 
-              { type: 'user', text: transcript || 'Voice message' },
-              { type: 'bot', text: response.data.textResponse }
-            ]);
-          } else {
-            throw new Error('No response received');
-          }
-
-        } catch (error) {
-          console.error('API call error:', error);
-          setError('Voice processing failed: ' + error.message);
-        }
+      // Simulating API call - replace with actual endpoint
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      const mockResponse = {
+        success: true,
+        textResponse: "Thank you for sharing that. Can you tell me more about your experience with similar challenges?",
+        audioResponse: null
       };
-
-      reader.readAsDataURL(audioBlob);
-
-    } catch (error) {
-      console.error('Audio processing error:', error);
-      setError('Audio processing failed: ' + error.message);
-    } finally {
-      setIsProcessing(false);
+      
+      if (mockResponse.success) {
+        await playAudioResponse(mockResponse.audioResponse, mockResponse.textResponse);
+        setConversation(p => [...p,
+          { type: 'user', text: transcript },
+          { type: 'bot', text: mockResponse.textResponse }
+        ]);
+      } else throw new Error('Invalid response');
+    } catch (err) {
+      setError('Request failed: ' + err.message);
+    } finally { 
+      setIsProcessing(false); 
     }
   };
 
-  // Play audio response
-  const playAudioResponse = async (base64AudioData) => {
-    try {
-      setIsPlaying(true);
-      
-      // Convert base64 to blob
-      const binaryString = atob(base64AudioData);
-      const arrayBuffer = new ArrayBuffer(binaryString.length);
-      const uint8Array = new Uint8Array(arrayBuffer);
-      
-      for (let i = 0; i < binaryString.length; i++) {
-        uint8Array[i] = binaryString.charCodeAt(i);
-      }
-      
-      const audioBlob = new Blob([arrayBuffer], { type: 'audio/wav' });
-      const audioUrl = URL.createObjectURL(audioBlob);
-      
-      const audio = new Audio(audioUrl);
-      audio.onended = () => {
-        setIsPlaying(false);
-        URL.revokeObjectURL(audioUrl);
-      };
-      
-      audio.onerror = () => {
-        setIsPlaying(false);
-        setError('Failed to play audio response');
-        URL.revokeObjectURL(audioUrl);
-      };
-      
-      await audio.play();
-
-    } catch (error) {
-      console.error('Audio playback error:', error);
-      setError('Failed to play audio response');
+  /* ---------- browser TTS ---------- */
+  const speakBrowserTTS = text => {
+    if (!('speechSynthesis' in window)) {
       setIsPlaying(false);
+      setError('Text-to-speech not supported');
+      return;
     }
+    speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    const selectVoice = () => {
+      const voices = speechSynthesis.getVoices();
+      return voices.find(v =>
+        v.name.includes('Google') ||
+        v.name.includes('Microsoft') ||
+        v.lang === 'en-US'
+      ) || voices[0];
+    };
+    utterance.voice = selectVoice();
+    utterance.rate = 0.9;
+    utterance.onend = () => setIsPlaying(false);
+    utterance.onerror = () => setIsPlaying(false);
+    speechSynthesis.speak(utterance);
+  };
+
+  /* ---------- audio playback ---------- */
+  const playAudioResponse = async (base64Audio, textResp) => {
+    setIsPlaying(true);
+    if (!base64Audio) { 
+      speakBrowserTTS(textResp); 
+      return; 
+    }
+
+    try {
+      const byteStr = atob(base64Audio);
+      const buf = new Uint8Array(byteStr.length).map((_, i) => byteStr.charCodeAt(i));
+      const blob = new Blob([buf], { type: 'audio/mp3' });
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = () => { 
+        setIsPlaying(false); 
+        URL.revokeObjectURL(url); 
+      };
+      audio.onerror = () => { 
+        URL.revokeObjectURL(url); 
+        speakBrowserTTS(textResp); 
+      };
+      await audio.play();
+    } catch { 
+      speakBrowserTTS(textResp); 
+    }
+  };
+
+  const getButtonContent = () => {
+    if (isProcessing) return <><Loader2 className="icon spin" /> Processing...</>;
+    if (isPlaying) return <><Volume2 className="icon" /> Speaking...</>;
+    if (isRecording) return <><MicOff className="icon" /> Stop Recording</>;
+    return <><Mic className="icon" /> Start Recording</>;
   };
 
   return (
-    <div className="App">
-      <header className="app-header">
-        <h1>🎤 Native Voice Interview</h1>
-        <p>100x AI Agent Team | Powered by Gemini Live API</p>
-        <div className="status-badges">
-          <span className="badge native-audio">🎵 Native Audio</span>
-          <span className="badge real-time">⚡ Real-time</span>
-          <span className="badge human-like">🗣️ Human-like</span>
+    <div className="app">
+      {/* Header */}
+      <header className="header">
+        <div className="header-content">
+          <h1 className="header-title">Voice Interview Assistant</h1>
+          <p className="header-subtitle">Powered by AI • Speak naturally and receive instant feedback</p>
         </div>
       </header>
 
-      <main className="main-content">
+      {/* Main Content */}
+      <main className="main">
         {/* Voice Controls */}
         <div className="voice-controls">
-          <button 
-            className={`voice-btn ${isRecording ? 'recording' : ''} ${isProcessing ? 'processing' : ''} ${isPlaying ? 'playing' : ''}`}
+          <button
+            className={`voice-btn ${isRecording ? 'recording' : ''} ${(isProcessing || isPlaying) ? 'disabled' : ''}`}
             onClick={isRecording ? stopRecording : startRecording}
             disabled={isProcessing || isPlaying}
           >
-            {isRecording ? '🔴 Stop Recording' : 
-             isProcessing ? '🤖 AI Thinking...' :
-             isPlaying ? '🎵 Speaking...' :
-             '🎤 Start Voice Interview'}
+            {getButtonContent()}
           </button>
-          
+
+          {/* Status Indicators */}
           {isRecording && (
-            <div className="recording-indicator">
-              <span>🎤 Recording... Click "Stop Recording" when done</span>
-              <div className="pulse-animation"></div>
+            <div className="status-indicator">
+              <div className="pulse-dot"></div>
+              <span>Listening...</span>
             </div>
           )}
 
-          {isProcessing && (
-            <div className="processing-indicator">
-              <span>🤖 Processing with AI...</span>
+          {transcript && (
+            <div className="transcript-display">
+              <p className="transcript-label">You said:</p>
+              <p className="transcript-text">"{transcript}"</p>
             </div>
           )}
 
-          {isPlaying && (
-            <div className="playing-indicator">
-              <span>🎵 Playing AI response...</span>
+          {error && (
+            <div className="error-message">
+              <p>{error}</p>
             </div>
           )}
         </div>
 
-        {/* Real-time transcript */}
-        {transcript && (
-          <div className="transcript">
-            <h4>You said:</h4>
-            <p>"{transcript}"</p>
-          </div>
-        )}
-
-        {/* Error Display */}
-        {error && (
-          <div className="error">
-            <p>{error}</p>
-            <button onClick={() => setError('')}>Clear</button>
-          </div>
-        )}
-
-        {/* Conversation History */}
-        <div className="conversation">
-          {conversation.length === 0 && (
-            <div className="welcome-message">
-              <h3>🎤 Ready for Voice Interview!</h3>
-              <p><strong>This uses AI for natural conversation!</strong></p>
-              <p>Try asking:</p>
-              <ul>
-                <li>🗣️ "Tell me about your background"</li>
-                <li>🗣️ "What's your superpower?"</li>
-                <li>🗣️ "What are your growth areas?"</li>
-                <li>🗣️ "How do you push boundaries?"</li>
-              </ul>
+        {/* Conversation */}
+        {conversation.length > 0 && (
+          <div className="conversation-section">
+            <div className="conversation-header">
+              <MessageSquare className="icon" />
+              <h2>Conversation</h2>
             </div>
-          )}
-          
-          {conversation.map((msg, index) => (
-            <div key={index} className={`message ${msg.type}`}>
-              <div className="message-content">
-                <strong>{msg.type === 'user' ? '🎤 Interviewer:' : '🤖 Yaksh:'}</strong>
-                <p>{msg.text}</p>
+            
+            <div className="conversation">
+              {conversation.map((message, index) => (
+                <div key={index} className={`message-wrapper ${message.type}`}>
+                  <div className="message-avatar">
+                    {message.type === 'user' ? (
+                      <User className="icon" />
+                    ) : (
+                      <Bot className="icon" />
+                    )}
+                  </div>
+                  
+                  <div className="message-content">
+                    <div className="message-bubble">
+                      <p>{message.text}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Welcome Message */}
+        {conversation.length === 0 && (
+          <div className="welcome-card">
+            <h3 className="welcome-title">Ready to begin your interview</h3>
+            <p className="welcome-description">
+              Click the recording button and speak naturally. The AI interviewer will listen, 
+              understand your responses, and ask relevant follow-up questions.
+            </p>
+            <div className="features-grid">
+              <div className="feature-card">
+                <div className="feature-icon">
+                  <Mic className="icon" />
+                </div>
+                <p className="feature-title">Speak Clearly</p>
+                <p className="feature-description">Express your thoughts naturally</p>
+              </div>
+              <div className="feature-card">
+                <div className="feature-icon">
+                  <Bot className="icon" />
+                </div>
+                <p className="feature-title">AI Analysis</p>
+                <p className="feature-description">Intelligent response processing</p>
+              </div>
+              <div className="feature-card">
+                <div className="feature-icon">
+                  <Volume2 className="icon" />
+                </div>
+                <p className="feature-title">Audio Response</p>
+                <p className="feature-description">Hear questions and feedback</p>
               </div>
             </div>
-          ))}
-        </div>
+          </div>
+        )}
       </main>
     </div>
   );
