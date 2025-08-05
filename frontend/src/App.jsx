@@ -177,8 +177,8 @@ function App() {
       {/* Header */}
       <header className="header">
         <div className="header-content">
-          <h1 className="header-title">Voice Interview Assistant</h1>
-          <p className="header-subtitle">Powered by AI • Speak naturally and receive instant feedback</p>
+          <h1 className="header-title">My Voice Assistant</h1>
+          <p className="header-subtitle">Powered by AI • Speak naturally and receive instant responses, as if you're talking to the real Yaksh.</p>
         </div>
       </header>
 
@@ -249,9 +249,9 @@ function App() {
         {/* Welcome Message */}
         {conversation.length === 0 && (
           <div className="welcome-card">
-            <h3 className="welcome-title">Ready to begin your interview</h3>
+            <h3 className="welcome-title">Ready to begin our conversation?</h3>
             <p className="welcome-description">
-              Click the recording button and speak naturally. The AI interviewer will listen,
+              Click the recording button and speak naturally. The AI me will listen,
               understand your responses, and ask relevant follow-up questions.
             </p>
             <div className="features-grid">
